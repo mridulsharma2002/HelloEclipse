@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prompter">
+<meta name="theme-color" content="#0b0c0e">
+<title>Merges Prompter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: camera fills the screen; the script band hugs the top edge (next to the lens); controls sit in a bottom dock. */
+:root{
+  --ink:#0b0c0e;          /* base ground */
+  --band:rgba(8,9,11,.72);/* script band */
+  --text:#f4f5f2;
+  --dim:rgba(244,245,242,.38);
+  --on:#ff3b30;           /* tally red: on camera */
+  --off:#5ac8fa;          /* off camera / voiceover */
+  --line:rgba(255,255,255,.14);
+  --f-ui:"Archivo",system-ui,-apple-system,sans-serif;
+  --f-read:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --fs:30px;              /* prompter text size (user adjustable) */
+  --bandH:40vh;           /* prompter band height (user adjustable) */
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;background:var(--ink);color:var(--text);font-family:var(--f-ui);overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+button:focus-visible{outline:2px solid var(--off);outline-offset:2px}
+
+#cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+#cam.mirror{transform:scaleX(-1)}
+
+/* tally frame */
+#tally{position:fixed;inset:0;pointer-events:none;border:4px solid transparent;transition:border-color .25s;z-index:5}
+#tally.on{border-color:var(--on)}
+
+/* script band */
+#band{position:fixed;left:0;right:0;top:0;height:calc(var(--bandH) + env(safe-area-inset-top,0px));padding-top:env(safe-area-inset-top,0px);background:var(--band);z-index:3;overflow:hidden;
+  -webkit-mask-image:linear-gradient(#000 0,#000 78%,transparent 100%);mask-image:linear-gradient(#000 0,#000 78%,transparent 100%)}
+#bandHead{position:absolute;left:0;right:0;top:env(safe-area-inset-top,0px);height:34px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 max(14px,env(safe-area-inset-right,0px)) 0 max(14px,env(safe-area-inset-left,0px));z-index:2;background:rgba(8,9,11,.96);border-bottom:1px solid var(--line)}
+#cue{white-space:nowrap;flex:none;display:inline-flex;align-items:center;gap:7px;font-weight:800;font-size:13px;letter-spacing:.08em;text-transform:uppercase;padding:5px 10px 5px 8px;border-radius:6px;background:rgba(255,255,255,.08)}
+#cue i{width:9px;height:9px;border-radius:50%;background:currentColor}
+#cue.on{color:#fff;background:var(--on)}
+#cue.on i{background:#fff;animation:blink 1.1s steps(2,start) infinite}
+#cue.off{color:var(--off)}
+@keyframes blink{to{visibility:hidden}}
+#nextCue{flex:1;min-width:0;text-align:right;font-size:12px;font-weight:600;color:var(--dim);letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#recClock{font-family:var(--f-mono);font-size:13px;color:#fff;display:flex;align-items:center;gap:6px}
+#recClock i{width:8px;height:8px;border-radius:50%;background:var(--on)}
+
+#viewport{position:absolute;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 34px);bottom:0}
+#readLine{position:absolute;left:0;right:0;top:var(--readY,18px);height:0;border-top:1px dashed rgba(255,255,255,.18);pointer-events:none}
+#readLine::before{content:"";position:absolute;left:4px;top:-6px;border:6px solid transparent;border-left:9px solid var(--text);opacity:.8}
+#track{position:absolute;left:0;right:0;top:0;padding:0 max(22px,env(safe-area-inset-right,0px)) 60vh max(24px,env(safe-area-inset-left,0px));will-change:transform}
+.seg{padding:0 0 calc(var(--fs) * .9);transition:opacity .3s}
+.seg .tag{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-ui);font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;padding:3px 8px;border-radius:5px}
+.seg.on .tag{background:var(--on);color:#fff}
+.seg.off .tag{border:1px solid var(--off);color:var(--off)}
+.seg p{margin:0;font-family:var(--f-read);font-weight:600;font-size:var(--fs);line-height:1.32;color:var(--dim);text-wrap:pretty;transition:color .3s}
+.seg.cur p{color:var(--text)}
+.seg.done{opacity:.35}
+.seg.end p{font-family:var(--f-ui);font-size:calc(var(--fs) * .7);color:var(--dim)}
+
+/* paused badge */
+#paused{position:absolute;right:max(14px,env(safe-area-inset-right,0px));bottom:16%;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;background:rgba(255,255,255,.12);padding:4px 8px;border-radius:5px;pointer-events:none}
+
+/* countdown */
+#count{position:fixed;inset:0;display:grid;place-items:center;font-family:var(--f-ui);font-weight:800;font-size:34vw;color:#fff;text-shadow:0 2px 30px rgba(0,0,0,.5);z-index:8;pointer-events:none}
+
+/* dock */
+#dock{position:fixed;left:0;right:0;bottom:0;z-index:6;padding:10px max(12px,env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.55))}
+.cluster{display:flex;align-items:center;gap:6px}
+.cluster.r{justify-content:flex-end}
+.btn{min-width:44px;height:44px;border-radius:12px;background:rgba(20,22,26,.72);border:1px solid var(--line);display:inline-grid;place-items:center;font-weight:700;font-size:14px;padding:0 10px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.btn small{display:block;font-size:10px;font-weight:600;color:var(--dim);margin-top:-2px}
+.speed{display:flex;align-items:center;background:rgba(20,22,26,.72);border:1px solid var(--line);border-radius:12px;height:44px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.speed button{width:34px;height:44px;font-size:20px;font-weight:600}
+.speed span{font-family:var(--f-mono);font-size:12px;min-width:46px;text-align:center;line-height:1.1}
+.speed span b{display:block;font-size:15px;font-weight:500}
+#rec{width:72px;height:72px;border-radius:50%;border:4px solid #fff;display:grid;place-items:center;background:rgba(0,0,0,.2)}
+#rec i{width:54px;height:54px;border-radius:50%;background:var(--on);transition:all .2s}
+#rec.live i{width:28px;height:28px;border-radius:7px}
+body.recording .hideRec{visibility:hidden}
+
+/* sheets */
+.sheet{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.55);display:flex;align-items:flex-end}
+.panel{width:100%;max-height:86vh;overflow:auto;background:#16181c;border-radius:18px 18px 0 0;padding:18px max(16px,env(safe-area-inset-right,0px)) calc(18px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));-webkit-user-select:text;user-select:text}
+.panel h2{margin:0 0 4px;font-size:20px;font-weight:800;text-wrap:balance}
+.panel .sub{margin:0 0 14px;color:var(--dim);font-size:13px;line-height:1.4}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.pill{height:44px;padding:0 16px;border-radius:12px;background:#24272d;border:1px solid var(--line);font-weight:700;font-size:15px}
+.pill.primary{background:#fff;color:#0b0c0e;border-color:#fff}
+.pill.danger{color:var(--on)}
+.list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.item{display:grid;grid-template-columns:1fr auto;gap:2px 10px;text-align:left;padding:12px;border-radius:12px;background:#1f2226;border:1px solid transparent}
+.item.sel{border-color:#fff}
+.item b{font-size:15px;line-height:1.25}
+.item span{grid-column:1;font-size:12px;color:var(--dim)}
+.item em{grid-row:1/3;grid-column:2;align-self:center;font-style:normal;font-family:var(--f-mono);font-size:11px;color:var(--dim)}
+.item.mine{background:#1d2328}
+textarea{width:100%;min-height:200px;border-radius:12px;background:#0f1114;color:var(--text);border:1px solid var(--line);padding:12px;font:15px/1.45 var(--f-read)}
+.set{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);font-size:15px}
+.set input[type=range]{width:55%}
+.set input[type=checkbox]{width:22px;height:22px}
+video#review{width:100%;max-height:52vh;border-radius:12px;background:#000;display:block}
+.note{font-size:12px;color:var(--dim);line-height:1.45}
+#msg{position:fixed;left:50%;top:calc(var(--bandH) + env(safe-area-inset-top,0px) + 14px);transform:translateX(-50%);z-index:9;background:rgba(20,22,26,.9);border:1px solid var(--line);padding:10px 14px;border-radius:10px;font-size:14px;max-width:calc(100% - 32px);text-align:center;line-height:1.35}
+
+/* no camera state */
+#nocam{position:fixed;left:0;right:0;top:calc(var(--bandH) + env(safe-area-inset-top,0px));bottom:110px;display:grid;place-items:center;padding:0 24px;text-align:center;z-index:2}
+#nocam p{margin:0 0 12px;color:var(--dim);font-size:14px;line-height:1.45;max-width:34ch}
+@media (prefers-reduced-motion:reduce){#cue.on i{animation:none}.seg,.seg p,#tally{transition:none}}
+</style>
+</head>
+<body>
+<video id="cam" class="mirror" playsinline muted autoplay></video>
+<div id="tally"></div>
+
+<section id="band" aria-label="Script">
+  <div id="bandHead">
+    <span id="cue" class="on"><i></i><span id="cueTxt">On camera</span></span>
+    <span id="nextCue"></span>
+    <span id="recClock" hidden><i></i><span id="clock">0:00</span></span>
+  </div>
+  <div id="viewport">
+    <div id="track"></div>
+    <div id="readLine"></div>
+    <div id="paused">Paused · tap to go</div>
+  </div>
+</section>
+
+<div id="nocam" hidden>
+  <div>
+    <p id="nocamTxt">Allow the camera so you can see yourself while you read.</p>
+    <button class="pill primary" id="camBtn">Turn on camera</button>
+  </div>
+</div>
+
+<div id="count" hidden>3</div>
+<div id="msg" hidden></div>
+
+<nav id="dock">
+  <div class="cluster">
+    <button class="btn hideRec" id="scriptsBtn" aria-label="Scripts"><svg viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M9 12h6M9 16h6"/></svg></button>
+    <div class="speed" aria-label="Speed">
+      <button id="slower" aria-label="Slower">−</button>
+      <span><b id="wpm">150</b>wpm</span>
+      <button id="faster" aria-label="Faster">+</button>
+    </div>
+  </div>
+  <button id="rec" aria-label="Record"><i></i></button>
+  <div class="cluster r">
+    <button class="btn" id="backBtn" aria-label="Back one line"><svg viewBox="0 0 24 24"><path d="M11 7l-5 5 5 5M18 7l-5 5 5 5"/></svg></button>
+    <button class="btn hideRec" id="setBtn" aria-label="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M4 7h4M16 7h4M4 17h10M18 17h2"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></svg></button>
+  </div>
+</nav>
+
+<!-- scripts sheet -->
+<div class="sheet" id="scriptsSheet" hidden>
+  <div class="panel">
+    <h2>Pick a script</h2>
+    <p class="sub">🎥 lines are ON CAMERA (look at the lens). 🎨 lines are OFF CAMERA (a diagram covers you, read freely).</p>
+    <div class="row">
+      <button class="pill" id="pasteOpen">Paste a script</button>
+      <button class="pill" id="fileOpen">Open from Files</button>
+      <input type="file" id="fileIn" accept=".md,.txt,text/plain,text/markdown" multiple hidden>
+    </div>
+    <div class="list" id="list"></div>
+    <div class="row"><button class="pill" data-close>Close</button></div>
+  </div>
+</div>
+
+<!-- paste sheet -->
+<div class="sheet" id="pasteSheet" hidden>
+  <div class="panel">
+    <h2>Paste a script</h2>
+    <p class="sub">Start lines with 🎥 for on camera and 🎨 for off camera. A first line starting with # becomes the title. Lines without a mark count as on camera.</p>
+    <textarea id="pasteBox" placeholder="# My video&#10;🎥 Hook line to the camera&#10;🎨 Explanation over the diagram&#10;🎥 Closing question"></textarea>
+    <div class="row"><button class="pill primary" id="pasteGo">Use this script</button><button class="pill" data-close>Cancel</button></div>
+  </div>
+</div>
+
+<!-- settings sheet -->
+<div class="sheet" id="setSheet" hidden>
+  <div class="panel">
+    <h2>Settings</h2>
+    <div class="set"><label for="fsR">Text size</label><input type="range" id="fsR" min="20" max="48" step="1"></div>
+    <div class="set"><label for="bandR">Script area height</label><input type="range" id="bandR" min="24" max="62" step="1"></div>
+    <div class="set"><label for="dimR">Band darkness</label><input type="range" id="dimR" min="30" max="95" step="1"></div>
+    <div class="set"><label for="mirrorC">Mirror my preview</label><input type="checkbox" id="mirrorC"></div>
+    <div class="set"><label for="autoC">Start scrolling when I hit record</label><input type="checkbox" id="autoC"></div>
+    <div class="set"><label for="countC">3-second countdown</label><input type="checkbox" id="countC"></div>
+    <div class="set"><label for="pauseC">Pause briefly between parts</label><input type="checkbox" id="pauseC"></div>
+    <div class="row"><button class="pill" id="restartBtn">Back to start</button><button class="pill" id="flipBtn">Switch camera</button></div>
+    <p class="note" id="camInfo"></p>
+    <p class="note">Tap the script to pause or play. Drag it up or down to move. The red frame and blinking tally mean you are on camera: look at the lens. Blue means voiceover: read freely.</p>
+    <div class="row"><button class="pill" data-close>Done</button></div>
+  </div>
+</div>
+
+<!-- review sheet -->
+<div class="sheet" id="reviewSheet" hidden>
+  <div class="panel">
+    <h2 id="reviewTitle">Take saved here</h2>
+    <p class="sub" id="reviewSub"></p>
+    <video id="review" playsinline controls></video>
+    <div class="row">
+      <button class="pill primary" id="shareBtn">Save or share</button>
+      <button class="pill" id="dlBtn">Download</button>
+      <button class="pill danger" id="discardBtn">Discard</button>
+    </div>
+    <p class="note">On iPhone, tap Save or share, then Save Video to put it in Photos, or Save to Files &gt; mridulmerges &gt; 00-raw. The take is lost if you close this page before saving.</p>
+    <div class="row"><button class="pill" id="keepBtn">Record another take</button></div>
+  </div>
+</div>
+
+<script>
+const BUILTIN = [{"id": "b-05-weather-app", "title": "05-weather-app", "text": "# Where does the weather app's number come from?\nAbout 50 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 The app said 0% chance of rain. Ten minutes later, you're soaked. So where does that number even come from?\n\n🎨 Step one is data. Weather stations, satellites, radar and balloons, feeding in around the clock.\n\n🎨 Step two, supercomputers cut the sky into a 3D grid of boxes, each several kilometres wide, and use physics to predict every box hours ahead.\n\n🎨 Your weather app doesn't run any of that. It pulls the results from a weather API.\n\n🎨 In pseudocode: when you open the app, round your location to a grid square. If that square's forecast is cached, send it. If not, ask the weather API, cache it for 10 minutes, then send it.\n\n🎨 That's why millions of people can open the app at 7 a.m. and the API barely notices.\n\n🎥 And your rain? The forecast is for the whole box, not your street. What app should I break down next?\n"}, {"id": "b-06-caching", "title": "06-caching", "text": "# How Amazon survives Black Friday (caching)\nAbout 50 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 Black Friday. Two million people open the same AirPods page at the same time. If every one of them hit the database, it would fall over. So why doesn't it?\n\n🎨 Because most of them never touch the database. They hit a cache.\n\n🎨 A cache is a small, super fast memory, like Redis, sitting between the app and the database.\n\n🎨 In pseudocode: page equals cache get. If it's there, return it. If not, get it from the database, save it in the cache for 60 seconds, then return it.\n\n🎨 The first person pays for the slow trip. The next million get it in about a millisecond.\n\n🎨 The hard part is when the price changes. Now the cache is lying. So you either let it expire, or delete it the moment the data changes.\n\n🎥 Fast versus fresh. That trade-off is exactly what interviewers want to hear. Save this one for your next interview.\n"}, {"id": "b-07-uber-driver-matching", "title": "07-uber-driver-matching", "text": "# How Uber finds your driver in 4 seconds\nAbout 50 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 It's 2 a.m., it's pouring rain, and you tap Request. Four seconds later, a driver three minutes away says yes. Out of thousands of drivers in the city, how did it find him that fast?\n\n🎨 Every driver's phone sends its location to Uber every few seconds.\n\n🎨 Checking your distance to every single driver would be way too slow.\n\n🎨 So Uber cuts the whole map into hexagons and drops each driver into the hexagon he's in.\n\n🎨 Now finding nearby drivers isn't a search. It's a lookup.\n\n🎨 In pseudocode: cell equals hexagon of my location. Drivers equals everyone in that cell, plus the six around it. Sort by arrival time. Ask the closest one. If he says no, ask the next.\n\n🎨 Behind that one button: a location service taking in millions of pings, an in-memory map of hexagons, and a matching service that does the asking.\n\n🎥 The trick isn't a faster computer. It's never searching the whole city in the first place.\n\n🎨 That's called a spatial index. It's the same idea behind food delivery, \"stores near me\" and dating app distance.\n\n🎥 Want the full system design version next? Tell me in the comments.\n"}, {"id": "b-08-rag", "title": "08-rag", "text": "# How ChatGPT answers from your PDF (RAG)\nAbout 50 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 You upload your 80-page lease and ask, \"Can I have a dog?\" Three seconds later, the AI quotes page 47. It didn't reread all 80 pages. So how did it find the right one?\n\n🎨 First, the document gets cut into small chunks, about a paragraph each.\n\n🎨 Each chunk becomes an embedding: a list of numbers that captures what it means. Paragraphs about pets land close together. Paragraphs about rent land somewhere else.\n\n🎨 All of those go into a vector database.\n\n🎨 Your question gets turned into numbers too, and the database finds the chunks closest in meaning.\n\n🎨 In pseudocode: chunks equals search the question, top three. Prompt equals those chunks plus the question. Answer equals the model of that prompt.\n\n🎨 The model only sees the three paragraphs that matter, and writes from those.\n\n🎥 That's RAG. Retrieve, then generate. It's how AI uses your files without being retrained.\n\n🎥 The catch? If the search grabs the wrong paragraph, the AI answers confidently from the wrong page. What should I break down next?\n"}, {"id": "b-09-mcp", "title": "09-mcp", "text": "# How AI gets into your calendar (MCP)\nAbout 50 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 You tell Claude, \"Check my calendar and email the team I'm running late.\" And it actually does it. But the AI lives on a server somewhere. How did it get into your calendar?\n\n🎨 The model itself can only do one thing: write text.\n\n🎨 So it's handed a menu of tools. Each tool has a name, a description, and the inputs it needs. Like: send email, to, subject, body.\n\n🎨 MCP, the Model Context Protocol, is a standard way to plug those tools in. Your calendar, Gmail, GitHub, each one runs as its own MCP server.\n\n🎨 When you ask, the model doesn't send anything. It writes a request: call \"get events\" for today.\n\n🎨 The app runs that tool and hands the result back to the model.\n\n🎨 In pseudocode: loop. Reply equals model of the chat plus tools. If the reply is a tool call, run it and add the result to the chat. Otherwise, show the reply.\n\n🎥 Think of MCP like USB-C for AI. One plug shape, any tool.\n\n🎥 And that loop? That's basically what an AI agent is. Want me to break down AI agents next?\n"}, {"id": "b-10-ai-agents", "title": "10-ai-agents", "text": "# What an AI agent actually does (Claude Code)\nAbout 50 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 You type one sentence into Claude Code, \"fix the failing test\", and walk away. Five minutes later, it's fixed. Nobody told it which file. So what was it doing?\n\n🎨 An AI agent is just a model in a loop, with tools.\n\n🎨 For a coding agent, the tools are things like: search the code, read a file, edit a file, run a command.\n\n🎨 Step one, it runs the tests and reads the error.\n\n🎨 Step two, it searches for the code that's breaking, opens it, and makes an edit.\n\n🎨 Step three, it runs the tests again. Still failing? It reads the new error and tries again.\n\n🎨 In pseudocode: while not done. Think. Pick a tool. Run it. Look at the result.\n\n🎨 That's the difference. A chatbot answers once. An agent checks its own work.\n\n🎥 The catch? Give it a vague goal or bad tests, and it will very confidently fix the wrong thing. What should I break down next?\n"}, {"id": "b-11-the-cloud", "title": "11-the-cloud", "text": "# What \"the cloud\" actually is (data centers)\nAbout 65 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 You drop your phone in a lake. New phone, you sign in, and every single photo comes back. So where were they this whole time?\n\n🎨 \"In the cloud.\" Which really means someone else's computers. A lot of them.\n\n🎨 They live in data centers: warehouse-sized buildings packed with rows of servers, stacked in racks.\n\n🎨 A server is basically a computer with no screen. Processors, memory, and drives, slid into a rack like pizza boxes. One building can hold tens of thousands of them.\n\n🎨 Every server is plugged into a fast network, so they can talk to each other and to the internet at the same time.\n\n🎨 When you upload a photo, it doesn't get saved once. It gets copied to several drives, often in different buildings.\n\n🎨 A simple version in pseudocode: save the photo to three servers. Only say \"uploaded\" once at least two of them confirm.\n\n🎨 So if one drive dies, or a whole building floods, your photo still exists somewhere else.\n\n🎨 When you sign in on the new phone, it asks the closest copy that's still healthy, and your photos stream back down.\n\n🎨 Running all that takes huge amounts of power and cooling. That's why data centers get built near cheap electricity, and sometimes cold climates.\n\n🎥 On the flip side, the cloud is really just copies of your stuff, in buildings, owned by companies like Amazon, Google and Microsoft, who rent their computers out by the minute.\n\n🎥 What should I break down next? Tell me in the comments.\n"}, {"id": "b-12-text-across-the-ocean", "title": "12-text-across-the-ocean", "text": "# Could a shark be why your text didn't send? (undersea cables)\nAbout 75 seconds at a relaxed pace\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 It's 3 a.m. You're on a trip in London, out with your friends, and your dad back home texts you: \"Where are you?\" You type \"asleep\", hit send... and it just won't go through. Could a shark be the reason?\n\n🎨 When you hit send, your phone scrambles the message first, so only your dad's phone can read it.\n\n🎨 It jumps through the air to the nearest cell tower. That's the only wireless part. After that, it's all wires: glass cables carrying your text as flashes of light.\n\n🎨 Apple's or WhatsApp's servers check where your dad's phone is right now. Toronto. Across an entire ocean.\n\n🎨 And it doesn't go by satellite. It goes through a cable lying on the ocean floor, about as thick as a garden hose. Almost all the internet traffic between continents runs through cables like this one.\n\n🎨 And yes, sharks have actually bitten these cables. But most breaks come from ship anchors and fishing nets dragging along the bottom.\n\n🎨 Here's the server's job, in pseudocode: if Dad's phone is online, push the message now. If it's not, store it, and deliver it the second he reconnects.\n\n🎨 The catch is that one cable carries so much. In 2022, a volcano cut Tonga's only cable, and the whole country was mostly offline for weeks. That's why countries want more than one.\n\n🎥 So no, it probably wasn't a shark. Your text went through. Your dad's just reading it. What should I break down next?\n\n---\nVisual notes\n- Hook: a phone mockup with the dad's \"Where are you?\" bubble, the reply stuck on \"Sending...\", then a cartoon-free drawn shark silhouette circling a cable (no emoji).\n- Map beat: London to Toronto arc, then the camera tilts down under the water to the cable on the seabed (3D plane, slow push).\n- Cable cross-section: copper, steel armour, glass fibre core, labelled in sentence case.\n- Breaks beat: anchor dragging, net, small shark bite mark; a counter \"most breaks: ships\".\n- Pseudocode card: online? push : store, deliver on reconnect. Highlight the active line.\n- Trade-off: Tonga on a map with one cable line going dark.\n- End: \"Delivered\" under the bubble, then \"Read 3:02 AM\".\nFacts checked: fish bites are a tiny share of cable faults (most are anchors and fishing gear); about 95%+ of intercontinental traffic is undersea cable; Tonga's single cable was cut by the Hunga Tonga eruption in Jan 2022, with most connectivity back around five weeks later.\n"}, {"id": "b-13-black-ops-in-a-browser", "title": "13-black-ops-in-a-browser", "text": "# How Black Ops ended up running in a browser tab (reverse engineering + AI)\nAbout 65 seconds · timely (October 2026 ports + takedowns)\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 Back in the day, it's you and your sister on the couch, split screen, Call of Duty Black Ops. Years later, it's running in a browser tab. No console, no install. How is that even possible?\n\n🎨 A console game doesn't ship with its source code. It ships as machine code: millions of raw instructions written for one specific chip.\n\n🎨 Reverse engineering means reading that machine code and working out what it does.\n\n🎨 Tools like Ghidra and IDA turn those raw bytes back into something close to readable code. That's called decompiling.\n\n🎨 But it comes out messy. Thousands of functions with no names, just things like \"FUN_004A3F\". People used to spend years labelling them by hand.\n\n🎨 Then the hard part: the original game expects a console. Its controller, its graphics chip, its memory. All of that has to be faked or rewritten.\n\n🎨 Now AI coding agents read that output, figure out what each function does, and rename it. FUN_004A3F becomes \"reload weapon\".\n\n🎨 Then the game gets rebuilt for the web. Graphics through WebGL, and the heavy code compiled to WebAssembly, so it runs close to full speed in your browser.\n\n🎨 In pseudocode: for each function in the game. Decompile it. Ask the AI what it does. Rename it. Rewrite it for the web. Test it against the original.\n\n🎨 This October, browser versions of Black Ops, Halo and GTA Vice City went viral. Some were reportedly built overnight.\n\n🎥 On the flip side, within weeks Activision sent takedown notices. Taking a game apart to learn how it works is one thing. Handing out someone else's game is another.\n\n🎥 Which old game do you miss the most?\n"}, {"id": "b-14-tesla-vision", "title": "14-tesla-vision", "text": "# How my Tesla sees the road (computer vision)\nAbout 70 seconds · film in your Tesla, parked (never while driving)\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 My car can see a kid's ball roll into the street before I do. It has no laser scanner on the roof. Just cameras. So how does it actually see?\n\n🎨 Around the car there are about eight cameras: in the windshield, the pillars, the mirrors and the back. Together they cover all 360 degrees, dozens of times every second.\n\n🎨 But a camera only gives you pixels. Millions of coloured dots. Nothing in there says \"car\" or \"lane\" or \"person\".\n\n🎨 So every frame goes into a neural network running on a computer inside the car. Not the cloud. It has to decide in milliseconds, even with no signal.\n\n🎨 Step one: it stitches all eight views into one picture of the world around the car. A 3D map of where everything is.\n\n🎨 Step two: it labels that map. Lanes, curbs, cars, cyclists, a ball. And it predicts where each one is going to be a second from now.\n\n🎨 Step three: it picks a path. Not the fastest one. The one that stays farthest from trouble.\n\n🎨 In pseudocode, many times a second: see, by stitching the cameras into a 3D scene. Predict where every object will move. Choose the safest path. Then steer, brake, or accelerate.\n\n🎨 The interesting part: since version 12, Tesla says most of this is one big neural network, trained on millions of video clips of real people driving. It replaced hundreds of thousands of lines of hand-written rules.\n\n🎥 On the flip side, cameras can't measure distance directly the way lidar lasers can. Tesla bets that a smart enough brain can work out depth from pictures, like your eyes do. Other companies add lidar to be sure.\n\n🎥 That's why it's still called Full Self-Driving, Supervised. I still keep my eyes on the road. Would you trust it? Tell me in the comments.\n"}, {"id": "b-15-ai-tokens", "title": "15-ai-tokens", "text": "# Why AI can't count the r's in strawberry (tokens)\nAbout 65 seconds\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 AI can write an essay in five seconds, but ask it how many r's are in \"strawberry\" and it can get it wrong. The reason is kind of wild: AI never actually sees letters.\n\n🎨 Before your message reaches the model, it goes through a tokenizer. A tokenizer chops your text into pieces called tokens.\n\n🎨 Common words are one token. \"The\", \"dog\", \"hello\". Rare or long words get split. \"Strawberry\" might become \"str\", \"aw\", \"berry\".\n\n🎨 Then every token is swapped for a number. Its ID in a giant dictionary of a hundred thousand or more pieces. So the model never sees \"strawberry\". It sees something like three numbers.\n\n🎨 That's why counting letters is hard. The r's are hidden inside the numbers.\n\n🎨 So how does it decide where to cut? Most tokenizers learn it from data, with an idea called byte-pair encoding.\n\n🎨 In pseudocode: start with every single character as its own piece. Find the two pieces that appear next to each other most often in a mountain of text. Glue them into one new piece. Repeat until the dictionary is full.\n\n🎨 Do that enough times and \"t\" plus \"h\" becomes \"th\", then \"the\". Frequent words end up as one token, rare words stay in chunks.\n\n🎨 Rough rule: one token is about three quarters of a word in English. A hundred words is around a hundred and thirty tokens.\n\n🎥 And tokens are everything in AI. Your context window, how much the AI can remember at once, is measured in tokens. And the price you pay is per token.\n\n🎥 What should I break down next?\n"}, {"id": "b-16-leaked-key-5-minutes", "title": "16-leaked-key-5-minutes", "text": "# How a leaked key gets used in 5 minutes\nAbout 65 seconds · news hook, architecture body · pairs with LinkedIn post 2 and its diagram\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 Microsoft just watched hackers go from one leaked password to a company's whole vault in five minutes. Nobody was typing. So how is that even possible?\n\n🎨 First, what got leaked. Apps talk to cloud services using a key, a long string of text. And a cloud key works like a hotel key card. The door doesn't check your face. Whoever holds the card gets in.\n\n🎨 Developers keep these keys in a file called dot env. One wrong git push, and that file is public on GitHub. Deleting it later doesn't help, because git keeps history.\n\n🎨 Now the attacker's side. GitHub publishes a live feed of new public code. So a bot can sit on that feed like someone watching a conveyor belt.\n\n🎨 In pseudocode: for every new public commit, look for text shaped like a key. Many keys have a pattern, like a prefix and forty random characters. If it matches, try to log in. If the login works, ask the cloud: what can this key reach?\n\n🎨 That last step is the dangerous one. Lots of keys can open a key vault, which is basically the hotel's master key cabinet. Open that, and you have every other key.\n\n🎨 Feed, match, test, vault. Each step takes seconds. That's your five minutes.\n\n🎨 The fix is architecture too. Keys that expire in an hour, so a stolen card stops working. And a scanner that blocks the push before the key ever leaves your laptop.\n\n🎥 The trade-off: short-lived keys mean more moving parts to manage. But a key that dies in an hour can't open much. Have you ever pushed a secret by accident?\n"}, {"id": "b-17-hacked-store-fridges", "title": "17-hacked-store-fridges", "text": "# How do you hack a fridge?\nAbout 65 seconds · news hook, architecture body · pairs with LinkedIn post 3 and its diagram\n\n🎥 = look at the camera · 🎨 = covered by a diagram, so read it straight off your screen\n\n🎥 Over a hundred grocery stores in Europe just found their fridges set to fifty degrees. Not broken. Someone told them to. So how do you even hack a fridge?\n\n🎨 A store fridge isn't like the one in your kitchen. It's part of a chain. A temperature sensor inside, a small computer called a controller next to it, and the controller connected to the internet.\n\n🎨 Why the internet? So one technician can watch every store's fridges from one dashboard, and get an alert at 3 a.m. when a freezer warms up.\n\n🎨 Think of it like the thermostat at home, but with a remote that works from anywhere in the world.\n\n🎨 Here's what the controller runs, in pseudocode. Every minute: read the temperature. If it's above the set point, turn the cooling on. Otherwise, rest.\n\n🎨 And the set point is just a number. When the dashboard says \"set it to fifty\", the controller doesn't ask why. It trusts whoever is holding the remote.\n\n🎨 So the attacker doesn't need to touch a fridge. They just need the remote. We don't know yet how they got in here, but the usual ways are a weak or reused password, a factory default nobody changed, or old software with a known hole. And these boxes often run ten years without an update.\n\n🎨 The fix is one more line of pseudocode, on the device itself: if the new set point is above ten degrees, refuse and raise an alarm. Even with the remote, you can't cook the food.\n\n🎥 The trade-off: remote control saves stores a ton of money, but every connected thing is one more door. What's the most random thing in your house that's on Wi-Fi?\n"}];
+
+/* ---------- storage helpers ---------- */
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem('mp.'+k); return v==null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem('mp.'+k, JSON.stringify(v)); }catch(e){} }
+};
+const $ = s => document.querySelector(s);
+const prefs = Object.assign({fs:30, band:40, dim:72, mirror:true, auto:true, count:true, pause:true, wpm:150}, store.get('prefs', {}));
+function savePrefs(){ store.set('prefs', prefs); }
+
+/* ---------- parsing ---------- */
+function parseScript(text, fallbackTitle){
+  const lines = text.replace(/\r/g,'').split('\n');
+  let title = fallbackTitle || 'Untitled script', meta = '';
+  const segs = [];
+  let sawMarks = /🎥|🎨/.test(text);
+  for (let raw of lines){
+    let l = raw.trim();
+    if (!l) continue;
+    if (/^---+$/.test(l)) break;               // visual notes etc. below
+    if (l.startsWith('# ')) { title = l.slice(2).trim(); continue; }
+    if (/=\s*look at the camera/i.test(l)) continue; // legend line
+    let mode = null;
+    if (l.startsWith('🎥')) { mode='on'; l=l.slice(2).trim(); }
+    else if (l.startsWith('🎨')) { mode='off'; l=l.slice(2).trim(); }
+    else if (/^\[(on|off)\]/i.test(l)) { mode = /^\[on\]/i.test(l) ? 'on' : 'off'; l=l.replace(/^\[(on|off)\]\s*/i,''); }
+    if (!mode){
+      if (sawMarks){ if (!segs.length && !meta) { meta = l; } continue; } // "About 50 seconds" line
+      mode = 'on';
+    }
+    l = l.replace(/^[-*]\s+/,'');
+    if (l) segs.push({mode, text:l});
+  }
+  return {title, meta, segs};
+}
+
+/* ---------- library ---------- */
+let mine = store.get('mine', []);   // [{id,title,text}]
+function allScripts(){
+  return [
+    ...mine.map(m => ({...m, mine:true})),
+    ...BUILTIN
+  ];
+}
+function wordsOf(s){ return s.split(/\s+/).filter(Boolean).length; }
+
+/* ---------- prompter state ---------- */
+let script = null, segEls = [], segW = [], cum = [], totalW = 0;
+let pos = 0;          // progress in "word units"
+let playing = false, lastT = 0;
+const BREATH = 2.2;   // extra word-units at the end of each part when "pause between parts" is on
+
+const track = $('#track'), viewport = $('#viewport');
+
+function loadScript(s){
+  const parsed = parseScript(s.text, s.title);
+  script = {...s, ...parsed};
+  store.set('current', s.id);
+  track.innerHTML = '';
+  segEls = []; segW = []; cum = [];
+  parsed.segs.forEach((g, i) => {
+    const d = document.createElement('div');
+    d.className = 'seg ' + g.mode;
+    d.innerHTML = '<span class="tag">' + (g.mode==='on' ? '● On camera' : 'Off camera · voiceover') + '</span><p></p>';
+    d.querySelector('p').textContent = g.text;
+    track.appendChild(d); segEls.push(d);
+  });
+  const end = document.createElement('div');
+  end.className = 'seg end';
+  end.innerHTML = '<p>End of script. Hold for a second, then stop.</p>';
+  track.appendChild(end);
+  computeWeights();
+  pos = 0; playing = false; render(); updatePaused();
+  if (!parsed.segs.length) flash('No lines found. Mark lines with 🎥 or 🎨.');
+}
+function computeWeights(){
+  segW = script.segs.map(g => wordsOf(g.text) + (prefs.pause ? BREATH : 0));
+  cum = [0]; segW.forEach(w => cum.push(cum[cum.length-1] + w));
+  totalW = cum[cum.length-1];
+}
+
+/* map word-progress -> pixel offset of the read line within the track */
+function offsetFor(p){
+  if (!segEls.length) return 0;
+  let i = 0;
+  while (i < segW.length-1 && p >= cum[i+1]) i++;
+  const el = segEls[i];
+  const f = Math.max(0, Math.min(1, (p - cum[i]) / segW[i]));
+  const tag = el.querySelector('.tag').offsetHeight + 6;
+  return el.offsetTop + tag + f * (el.offsetHeight - tag);
+}
+function curIndex(p){
+  let i = 0;
+  while (i < segW.length-1 && p >= cum[i+1]) i++;
+  return i;
+}
+
+let lastIdx = -1;
+function render(){
+  if (!script) return;
+  const readY = Math.round(prefs.fs * 1.32 * 1.25) + 10;
+  viewport.style.setProperty('--readY', readY + 'px');
+  const y = offsetFor(pos);
+  track.style.transform = 'translate3d(0,' + (readY - y - 4) + 'px,0)';
+  const idx = curIndex(pos);
+  if (idx !== lastIdx){
+    segEls.forEach((el, i) => { el.classList.toggle('cur', i===idx); el.classList.toggle('done', i<idx); });
+    const g = script.segs[idx]; if (!g) return;
+    const on = g.mode === 'on';
+    $('#cue').className = on ? 'on' : 'off';
+    $('#cueTxt').textContent = on ? 'On camera' : 'Voiceover';
+    $('#tally').classList.toggle('on', on);
+    const nx = script.segs.slice(idx+1).find(s => s.mode !== g.mode);
+    $('#nextCue').textContent = (on ? 'Look at the lens' : 'Read freely') + (nx ? ' · next: ' + (nx.mode==='on' ? 'camera' : 'voiceover') : ' · last part');
+    lastIdx = idx;
+  }
+}
+function tick(t){
+  if (playing){
+    const dt = Math.min(0.1, (t - lastT) / 1000);
+    pos += dt * prefs.wpm / 60;
+    if (pos >= totalW){ pos = totalW; playing = false; updatePaused(); }
+    render();
+  }
+  lastT = t;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(t => { lastT = t; tick(t); });
+
+function setPlaying(v){ playing = v && pos < totalW; updatePaused(); }
+function updatePaused(){
+  const p = $('#paused');
+  p.hidden = playing;
+  p.textContent = pos >= totalW && totalW > 0 ? 'End · drag down to go back' : (pos === 0 ? 'Tap to start scrolling' : 'Paused · tap to go');
+}
+
+/* tap to pause, drag to scrub */
+let drag = null;
+viewport.addEventListener('pointerdown', e => { drag = {y:e.clientY, pos, moved:false, was:playing}; viewport.setPointerCapture(e.pointerId); });
+viewport.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dy = e.clientY - drag.y;
+  if (Math.abs(dy) > 8) drag.moved = true;
+  if (drag.moved){
+    playing = false;
+    // convert pixels to word units using the average density of the script
+    const h = track.scrollHeight - viewport.clientHeight * .6;
+    const perPx = totalW / Math.max(1, h);
+    pos = Math.max(0, Math.min(totalW, drag.pos - dy * perPx));
+    render();
+  }
+});
+viewport.addEventListener('pointerup', e => {
+  if (!drag) return;
+  if (!drag.moved) setPlaying(!drag.was);
+  else { setPlaying(false); }
+  drag = null;
+});
+viewport.addEventListener('pointercancel', () => { drag = null; });
+
+$('#backBtn').onclick = () => {
+  const i = curIndex(pos);
+  pos = (pos - cum[i] > 1.5 || i === 0) ? cum[i] : cum[i-1];
+  render(); updatePaused();
+};
+
+/* ---------- speed ---------- */
+function showWpm(){ $('#wpm').textContent = prefs.wpm; }
+$('#slower').onclick = () => { prefs.wpm = Math.max(70, prefs.wpm - 10); showWpm(); savePrefs(); };
+$('#faster').onclick = () => { prefs.wpm = Math.min(260, prefs.wpm + 10); showWpm(); savePrefs(); };
+
+/* ---------- look settings ---------- */
+function applyLook(){
+  const r = document.documentElement.style;
+  r.setProperty('--fs', prefs.fs + 'px');
+  r.setProperty('--bandH', prefs.band + 'vh');
+  r.setProperty('--band', 'rgba(8,9,11,' + (prefs.dim/100) + ')');
+  $('#cam').classList.toggle('mirror', prefs.mirror && facing === 'user');
+  lastIdx = -1;
+  requestAnimationFrame(render);
+}
+function bindRange(id, key){ const el = $(id); el.value = prefs[key]; el.oninput = () => { prefs[key] = +el.value; applyLook(); savePrefs(); }; }
+function bindCheck(id, key, after){ const el = $(id); el.checked = prefs[key]; el.onchange = () => { prefs[key] = el.checked; savePrefs(); applyLook(); after && after(); }; }
+bindRange('#fsR','fs'); bindRange('#bandR','band'); bindRange('#dimR','dim');
+bindCheck('#mirrorC','mirror'); bindCheck('#autoC','auto'); bindCheck('#countC','count');
+bindCheck('#pauseC','pause', () => { const f = totalW ? pos/totalW : 0; computeWeights(); pos = f*totalW; render(); });
+$('#restartBtn').onclick = () => { pos = 0; setPlaying(false); render(); closeSheets(); };
+
+/* ---------- sheets ---------- */
+function openSheet(id){ closeSheets(); $(id).hidden = false; }
+function closeSheets(){ document.querySelectorAll('.sheet').forEach(s => { if (s.id !== 'reviewSheet') s.hidden = true; }); }
+document.querySelectorAll('[data-close]').forEach(b => b.onclick = closeSheets);
+document.querySelectorAll('.sheet').forEach(s => s.addEventListener('click', e => { if (e.target === s && s.id !== 'reviewSheet') closeSheets(); }));
+$('#scriptsBtn').onclick = () => { renderList(); openSheet('#scriptsSheet'); };
+$('#setBtn').onclick = () => openSheet('#setSheet');
+$('#pasteOpen').onclick = () => openSheet('#pasteSheet');
+$('#fileOpen').onclick = () => $('#fileIn').click();
+
+function renderList(){
+  const L = $('#list'); L.innerHTML = '';
+  allScripts().forEach(s => {
+    const p = parseScript(s.text, s.title);
+    const on = p.segs.filter(g => g.mode==='on').length, off = p.segs.length - on;
+    const words = p.segs.reduce((a,g) => a + wordsOf(g.text), 0);
+    const b = document.createElement('button');
+    b.className = 'item' + (s.mine ? ' mine' : '') + (script && script.id === s.id ? ' sel' : '');
+    b.innerHTML = '<b></b><span></span><em></em>';
+    b.querySelector('b').textContent = p.title;
+    b.querySelector('span').textContent = (s.mine ? 'Added by you · ' : '') + on + ' on camera · ' + off + ' off camera';
+    b.querySelector('em').textContent = '~' + Math.round(words / prefs.wpm * 60) + 's';
+    b.onclick = () => { loadScript(s); closeSheets(); };
+    L.appendChild(b);
+  });
+}
+function addMine(title, text){
+  const id = 'mine-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
+  const p = parseScript(text, title);
+  mine = [{id, title:p.title, text}, ...mine.filter(m => m.title !== p.title)].slice(0, 30);
+  store.set('mine', mine);
+  return mine[0];
+}
+$('#pasteGo').onclick = () => {
+  const t = $('#pasteBox').value.trim();
+  if (!t) { flash('Paste some text first.'); return; }
+  const s = addMine('Pasted script', t);
+  $('#pasteBox').value = '';
+  loadScript(s); closeSheets();
+};
+$('#fileIn').onchange = async e => {
+  const files = [...e.target.files]; let last = null;
+  for (const f of files){ const t = await f.text(); last = addMine(f.name.replace(/\.(md|txt)$/i,''), t); }
+  e.target.value = '';
+  if (last){ loadScript(last); closeSheets(); flash(files.length + (files.length>1 ? ' scripts added' : ' script added')); }
+};
+
+let flashT;
+function flash(t){ const m = $('#msg'); m.textContent = t; m.hidden = false; clearTimeout(flashT); flashT = setTimeout(() => m.hidden = true, 2600); }
+
+/* ---------- camera ---------- */
+let stream = null, facing = 'user';
+async function startCam(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    $('#nocam').hidden = false;
+    $('#nocamTxt').textContent = location.protocol === 'https:' ? 'This browser cannot use the camera. On iPhone, open this link in Safari.' : 'The camera only works from the https link. Open the link in Safari.';
+    $('#camBtn').hidden = true;
+    return;
+  }
+  try{
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:facing, width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30}},
+      audio:{echoCancellation:true, noiseSuppression:true}
+    });
+    const v = $('#cam'); v.srcObject = stream; await v.play().catch(()=>{});
+    $('#nocam').hidden = true;
+    const s = stream.getVideoTracks()[0].getSettings();
+    $('#camInfo').textContent = 'Camera: ' + (s.width||'?') + '×' + (s.height||'?') + ' at ' + Math.round(s.frameRate||0) + ' fps · recording as ' + (pickMime() || 'browser default');
+    applyLook();
+  }catch(err){
+    $('#nocam').hidden = false;
+    $('#nocamTxt').textContent = err && err.name === 'NotAllowedError'
+      ? 'Camera access was blocked. In Safari, tap aA in the address bar > Website Settings > Camera and Microphone > Allow, then tap the button.'
+      : 'Could not start the camera (' + (err && err.name || 'error') + '). Close other camera apps and try again.';
+  }
+}
+$('#camBtn').onclick = startCam;
+$('#flipBtn').onclick = () => { if (recorder) return; facing = facing === 'user' ? 'environment' : 'user'; startCam(); };
+
+/* ---------- wake lock ---------- */
+let wake = null;
+async function keepAwake(){ try{ if ('wakeLock' in navigator && document.visibilityState === 'visible') wake = await navigator.wakeLock.request('screen'); }catch(e){} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+
+/* ---------- recording ---------- */
+let recorder = null, chunks = [], recStart = 0, clockT = null, lastBlob = null, lastName = '';
+function pickMime(){
+  if (!window.MediaRecorder) return '';
+  const c = ['video/mp4;codecs=avc1.640028,mp4a.40.2','video/mp4;codecs=avc1,mp4a','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+  return c.find(m => { try{ return MediaRecorder.isTypeSupported(m); }catch(e){ return false; } }) || '';
+}
+function slug(s){ return (s||'take').toLowerCase().replace(/\(.*?\)/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40); }
+
+async function countdown(){
+  if (!prefs.count) return;
+  const c = $('#count'); c.hidden = false;
+  for (let n = 3; n > 0; n--){ c.textContent = n; await new Promise(r => setTimeout(r, 800)); }
+  c.hidden = true;
+}
+$('#rec').onclick = async () => {
+  if (recorder){ stopRec(); return; }
+  if (!stream){ await startCam(); if (!stream) return; }
+  if (!window.MediaRecorder){ flash('This browser cannot record. Update iOS or use the Camera app.'); return; }
+  keepAwake();
+  $('#rec').disabled = true;
+  await countdown();
+  $('#rec').disabled = false;
+  const mime = pickMime();
+  try{
+    recorder = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:10000000, audioBitsPerSecond:160000} : {});
+  }catch(e){
+    try{ recorder = new MediaRecorder(stream); }catch(e2){ flash('Recording failed to start: ' + e2.message); recorder = null; return; }
+  }
+  chunks = [];
+  recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop = finishRec;
+  recorder.start(1000);
+  recStart = Date.now();
+  document.body.classList.add('recording');
+  $('#rec').classList.add('live'); $('#rec').setAttribute('aria-label','Stop');
+  $('#recClock').hidden = false;
+  clockT = setInterval(() => { const s = Math.floor((Date.now()-recStart)/1000); $('#clock').textContent = Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); }, 250);
+  if (prefs.auto){ if (pos >= totalW) pos = 0; setPlaying(true); }
+};
+function stopRec(){
+  if (!recorder) return;
+  try{ recorder.stop(); }catch(e){ finishRec(); }
+  setPlaying(false);
+}
+function finishRec(){
+  const type = (recorder && recorder.mimeType) || (chunks[0] && chunks[0].type) || 'video/mp4';
+  recorder = null; clearInterval(clockT);
+  document.body.classList.remove('recording');
+  $('#rec').classList.remove('live'); $('#rec').setAttribute('aria-label','Record');
+  $('#recClock').hidden = true;
+  if (!chunks.length){ flash('Nothing was recorded. Try again.'); return; }
+  lastBlob = new Blob(chunks, {type});
+  const ext = /mp4/.test(type) ? 'mp4' : 'webm';
+  const d = new Date();
+  lastName = 'mridulmerges-' + slug(script && script.title) + '-' + d.toISOString().slice(0,10) + '-' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0') + '.' + ext;
+  const v = $('#review'); if (v.src) URL.revokeObjectURL(v.src); v.src = URL.createObjectURL(lastBlob);
+  $('#reviewTitle').textContent = 'Take recorded';
+  $('#reviewSub').textContent = lastName + ' · ' + (lastBlob.size/1048576).toFixed(1) + ' MB · ' + $('#clock').textContent;
+  $('#reviewSheet').hidden = false;
+}
+$('#shareBtn').onclick = async () => {
+  if (!lastBlob) return;
+  const file = new File([lastBlob], lastName, {type:lastBlob.type});
+  if (navigator.canShare && navigator.canShare({files:[file]})){
+    try{ await navigator.share({files:[file], title:lastName}); flash('Shared'); }
+    catch(e){ if (e.name !== 'AbortError') flash('Share failed. Try Download.'); }
+  } else { download(); }
+};
+function download(){
+  if (!lastBlob) return;
+  const a = document.createElement('a'); a.href = $('#review').src; a.download = lastName;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+$('#dlBtn').onclick = download;
+$('#discardBtn').onclick = () => {
+  if ($('#discardBtn').dataset.sure !== '1'){ $('#discardBtn').dataset.sure = '1'; $('#discardBtn').textContent = 'Tap again to discard'; setTimeout(() => { $('#discardBtn').dataset.sure=''; $('#discardBtn').textContent='Discard'; }, 3000); return; }
+  $('#discardBtn').dataset.sure=''; $('#discardBtn').textContent='Discard';
+  lastBlob = null; $('#review').removeAttribute('src'); $('#reviewSheet').hidden = true;
+};
+$('#keepBtn').onclick = () => { $('#reviewSheet').hidden = true; $('#review').pause(); pos = 0; render(); updatePaused(); };
+window.addEventListener('beforeunload', e => { if (lastBlob || recorder){ e.preventDefault(); e.returnValue = ''; } });
+
+/* ---------- boot ---------- */
+showWpm(); applyLook();
+const cur = store.get('current', null);
+const first = allScripts().find(s => s.id === cur) || allScripts()[0];
+if (first) loadScript(first);
+window.addEventListener('resize', () => { lastIdx = -1; render(); });
+startCam(); keepAwake();
+</script>
+</body>
+</html>
